@@ -53,6 +53,25 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 }
 
+func TestAPIKeyProtectsWalletEndpoint(t *testing.T) {
+	handler := newAuthTestHandler()
+
+	missingKey := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/wallets", bytes.NewBufferString(`{"chain":"evm"}`))
+	handler.ServeHTTP(missingKey, request)
+	if missingKey.Code != http.StatusUnauthorized {
+		t.Fatalf("missing key status = %d, want %d", missingKey.Code, http.StatusUnauthorized)
+	}
+
+	authorized := httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/v1/wallets", bytes.NewBufferString(`{"chain":"evm"}`))
+	request.Header.Set("X-API-Key", "test-key")
+	handler.ServeHTTP(authorized, request)
+	if authorized.Code != http.StatusCreated {
+		t.Fatalf("authorized status = %d, want %d: %s", authorized.Code, http.StatusCreated, authorized.Body.String())
+	}
+}
+
 func newTestHandler() http.Handler {
 	metrics := observability.NewMetrics()
 	registry := wallet.NewChainRegistry(
@@ -71,4 +90,24 @@ func newTestHandler() http.Handler {
 	)
 	logger := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))
 	return api.NewServer(service, metrics, logger).Handler()
+}
+
+func newAuthTestHandler() http.Handler {
+	metrics := observability.NewMetrics()
+	registry := wallet.NewChainRegistry(
+		bitcoin.NewAdapter("testnet"),
+		evm.NewAdapter(31337),
+	)
+	signer, err := signing.NewDemoQuorumBackend()
+	if err != nil {
+		panic(err)
+	}
+	service := wallet.NewService(
+		store.NewMemoryStore(),
+		registry,
+		signer,
+		metrics,
+	)
+	logger := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))
+	return api.NewServer(service, metrics, logger, api.WithAPIKeys([]string{"test-key"})).Handler()
 }

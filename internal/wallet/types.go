@@ -31,6 +31,24 @@ const (
 	TransactionStatusFailed TransactionStatus = "failed"
 )
 
+// AuditEventType identifies a security-relevant custody event.
+type AuditEventType string
+
+const (
+	// AuditEventWalletCreated records wallet creation.
+	AuditEventWalletCreated AuditEventType = "wallet.created"
+	// AuditEventTransactionProposed records transaction proposal creation.
+	AuditEventTransactionProposed AuditEventType = "transaction.proposed"
+	// AuditEventTransactionApproved records signer approval.
+	AuditEventTransactionApproved AuditEventType = "transaction.approved"
+	// AuditEventTransactionSigned records quorum signing.
+	AuditEventTransactionSigned AuditEventType = "transaction.signed"
+	// AuditEventTransactionBroadcast records successful broadcast.
+	AuditEventTransactionBroadcast AuditEventType = "transaction.broadcast"
+	// AuditEventTransactionFailed records a signing or broadcast failure.
+	AuditEventTransactionFailed AuditEventType = "transaction.failed"
+)
+
 // Wallet stores chain-specific public wallet metadata.
 type Wallet struct {
 	ID        string    `json:"id"`
@@ -105,6 +123,33 @@ type EVMTransactionPayload struct {
 	Data                 string `json:"data"`
 	Type                 string `json:"type"`
 	CreatedAt            string `json:"created_at"`
+}
+
+// AuditEvent stores an immutable custody event for review and compliance workflows.
+type AuditEvent struct {
+	ID           string          `json:"id"`
+	Type         AuditEventType  `json:"type"`
+	Actor        string          `json:"actor,omitempty"`
+	ResourceType string          `json:"resource_type"`
+	ResourceID   string          `json:"resource_id"`
+	Chain        Chain           `json:"chain,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+// AuditFilter limits audit event queries.
+type AuditFilter struct {
+	ResourceID string
+	Limit      int
+}
+
+// IdempotencyRecord stores the resource created for a client idempotency key.
+type IdempotencyRecord struct {
+	Scope        string    `json:"scope"`
+	Key          string    `json:"key"`
+	ResourceType string    `json:"resource_type"`
+	ResourceID   string    `json:"resource_id"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // TransactionProposal stores the current state of a proposed transaction.

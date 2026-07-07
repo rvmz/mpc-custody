@@ -18,7 +18,7 @@ func TestEVMProposalRequiresTwoApprovalsBeforeBroadcast(t *testing.T) {
 	service := newTestService()
 	ctx := context.Background()
 
-	created, err := service.CreateWallet(ctx, wallet.ChainEVM)
+	created, err := service.CreateWallet(ctx, wallet.ChainEVM, "")
 	if err != nil {
 		t.Fatalf("create wallet: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestEVMProposalRequiresTwoApprovalsBeforeBroadcast(t *testing.T) {
 		Amount:       "1000000000000000",
 		GasLimit:     21000,
 		MaxFeePerGas: "2000000000",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("propose transaction: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestBitcoinProposalRequiresUTXOInputs(t *testing.T) {
 	service := newTestService()
 	ctx := context.Background()
 
-	created, err := service.CreateWallet(ctx, wallet.ChainBitcoin)
+	created, err := service.CreateWallet(ctx, wallet.ChainBitcoin, "")
 	if err != nil {
 		t.Fatalf("create wallet: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestBitcoinProposalRequiresUTXOInputs(t *testing.T) {
 		To:          "tb1qrecipient",
 		Amount:      "50000",
 		FeeRateSats: 5,
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected missing UTXO error")
 	}
@@ -89,7 +89,7 @@ func TestDuplicateApprovalIsRejected(t *testing.T) {
 	service := newTestService()
 	ctx := context.Background()
 
-	created, err := service.CreateWallet(ctx, wallet.ChainEVM)
+	created, err := service.CreateWallet(ctx, wallet.ChainEVM, "")
 	if err != nil {
 		t.Fatalf("create wallet: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDuplicateApprovalIsRejected(t *testing.T) {
 		Amount:       "1",
 		GasLimit:     21000,
 		MaxFeePerGas: "1",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("propose transaction: %v", err)
 	}
@@ -109,6 +109,47 @@ func TestDuplicateApprovalIsRejected(t *testing.T) {
 	}
 	if _, err := service.CoSign(ctx, proposal.ID, "alice"); err != wallet.ErrDuplicateApproval {
 		t.Fatalf("duplicate approval error = %v, want %v", err, wallet.ErrDuplicateApproval)
+	}
+}
+
+func TestIdempotentWalletCreationReturnsSameWallet(t *testing.T) {
+	service := newTestService()
+	ctx := context.Background()
+
+	first, err := service.CreateWallet(ctx, wallet.ChainEVM, "wallet-key")
+	if err != nil {
+		t.Fatalf("first create wallet: %v", err)
+	}
+	second, err := service.CreateWallet(ctx, wallet.ChainEVM, "wallet-key")
+	if err != nil {
+		t.Fatalf("second create wallet: %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("wallet ids differ: %s != %s", first.ID, second.ID)
+	}
+}
+
+func TestPolicyRejectsUnauthorizedSigner(t *testing.T) {
+	service := newPolicyTestService()
+	ctx := context.Background()
+
+	created, err := service.CreateWallet(ctx, wallet.ChainEVM, "")
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	proposal, err := service.ProposeTransaction(ctx, wallet.TransactionRequest{
+		WalletID:     created.ID,
+		To:           "0x1111111111111111111111111111111111111111",
+		Amount:       "1",
+		GasLimit:     21000,
+		MaxFeePerGas: "1",
+	}, "")
+	if err != nil {
+		t.Fatalf("propose transaction: %v", err)
+	}
+
+	if _, err := service.CoSign(ctx, proposal.ID, "mallory"); err == nil {
+		t.Fatal("expected unauthorized signer error")
 	}
 }
 
@@ -126,5 +167,23 @@ func newTestService() *wallet.Service {
 		registry,
 		signer,
 		observability.NewMetrics(),
+	)
+}
+
+func newPolicyTestService() *wallet.Service {
+	registry := wallet.NewChainRegistry(
+		bitcoin.NewAdapter("testnet"),
+		evm.NewAdapter(31337),
+	)
+	signer, err := signing.NewDemoQuorumBackend()
+	if err != nil {
+		panic(err)
+	}
+	return wallet.NewService(
+		store.NewMemoryStore(),
+		registry,
+		signer,
+		observability.NewMetrics(),
+		wallet.WithPolicy(wallet.Policy{AllowedSigners: map[string]struct{}{"alice": {}, "bob": {}}}),
 	)
 }

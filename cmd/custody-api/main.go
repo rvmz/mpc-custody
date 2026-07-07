@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,7 +35,7 @@ func main() {
 	defer closeStore()
 
 	registry := wallet.NewChainRegistry(
-		bitcoin.NewAdapter("testnet"),
+		bitcoin.NewAdapter(cfg.BitcoinNetwork),
 		evm.NewAdapter(cfg.EVMChainID, cfg.EVMRPCURL),
 	)
 	signer, err := signing.NewDemoQuorumBackend(signing.WithEVMPrivateKey(cfg.EVMDevPrivateKey))
@@ -47,8 +48,13 @@ func main() {
 		registry,
 		signer,
 		metrics,
+		wallet.WithPolicy(wallet.Policy{
+			AllowedSigners:       signerSet(cfg.SignerIDs),
+			MaxBitcoinAmountSats: cfg.MaxBTCAmountSats,
+			MaxEVMAmountWei:      cloneBigInt(cfg.MaxEVMAmountWei),
+		}),
 	)
-	apiServer := api.NewServer(service, metrics, logger)
+	apiServer := api.NewServer(service, metrics, logger, api.WithAPIKeys(cfg.APIKeys))
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -62,7 +68,9 @@ func main() {
 			"service", cfg.ServiceName,
 			"environment", cfg.Environment,
 			"broadcast_mode", cfg.BroadcastMode,
+			"bitcoin_network", cfg.BitcoinNetwork,
 			"evm_rpc_configured", cfg.EVMRPCURL != "",
+			"api_auth_enabled", len(cfg.APIKeys) > 0,
 		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("http server failed", "error", err)
@@ -95,4 +103,22 @@ func openStore(ctx context.Context, cfg config.Config, logger *slog.Logger) (wal
 	}
 	logger.Info("using postgres store")
 	return postgresStore, postgresStore.Close, nil
+}
+
+func signerSet(signers []string) map[string]struct{} {
+	if len(signers) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(signers))
+	for _, signer := range signers {
+		set[signer] = struct{}{}
+	}
+	return set
+}
+
+func cloneBigInt(value *big.Int) *big.Int {
+	if value == nil {
+		return nil
+	}
+	return new(big.Int).Set(value)
 }

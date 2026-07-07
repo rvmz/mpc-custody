@@ -166,6 +166,87 @@ func (s *PostgresStore) UpdateTransaction(ctx context.Context, proposal wallet.T
 	return nil
 }
 
+// AppendAuditEvent stores an immutable audit event.
+func (s *PostgresStore) AppendAuditEvent(ctx context.Context, event wallet.AuditEvent) error {
+	var metadata any
+	if len(event.Metadata) > 0 {
+		metadata = string(event.Metadata)
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO audit_events (id, event_type, actor, resource_type, resource_id, chain, metadata, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, event.ID, string(event.Type), event.Actor, event.ResourceType, event.ResourceID, string(event.Chain), metadata, event.CreatedAt)
+	return err
+}
+
+// ListAuditEvents returns audit events ordered from newest to oldest.
+func (s *PostgresStore) ListAuditEvents(ctx context.Context, filter wallet.AuditFilter) ([]wallet.AuditEvent, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+
+	query := `
+		SELECT id, event_type, actor, resource_type, resource_id, chain, metadata, created_at
+		FROM audit_events
+		WHERE ($1 = '' OR resource_id = $1)
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+	rows, err := s.pool.Query(ctx, query, filter.ResourceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]wallet.AuditEvent, 0)
+	for rows.Next() {
+		var event wallet.AuditEvent
+		var eventType string
+		var chain string
+		var metadata []byte
+		if err := rows.Scan(&event.ID, &eventType, &event.Actor, &event.ResourceType, &event.ResourceID, &chain, &metadata, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		event.Type = wallet.AuditEventType(eventType)
+		event.Chain = wallet.Chain(chain)
+		if len(metadata) > 0 {
+			event.Metadata = metadata
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+// SaveIdempotency stores an idempotency key result.
+func (s *PostgresStore) SaveIdempotency(ctx context.Context, record wallet.IdempotencyRecord) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO idempotency_keys (scope, key, resource_type, resource_id, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, record.Scope, record.Key, record.ResourceType, record.ResourceID, record.CreatedAt)
+	if isUniqueViolation(err) {
+		return ErrDuplicateIdempotency
+	}
+	return err
+}
+
+// GetIdempotency returns the stored resource for an idempotency key.
+func (s *PostgresStore) GetIdempotency(ctx context.Context, scope string, key string) (wallet.IdempotencyRecord, error) {
+	var record wallet.IdempotencyRecord
+	err := s.pool.QueryRow(ctx, `
+		SELECT scope, key, resource_type, resource_id, created_at
+		FROM idempotency_keys
+		WHERE scope = $1 AND key = $2
+	`, scope, key).Scan(&record.Scope, &record.Key, &record.ResourceType, &record.ResourceID, &record.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return wallet.IdempotencyRecord{}, nil
+	}
+	if err != nil {
+		return wallet.IdempotencyRecord{}, err
+	}
+	return record, nil
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"

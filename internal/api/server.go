@@ -2,10 +2,12 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/rvmz/mpc-custody/internal/observability"
@@ -18,11 +20,26 @@ type Server struct {
 	service *wallet.Service
 	metrics *observability.Metrics
 	logger  *slog.Logger
+	apiKeys []string
+}
+
+// Option configures the API server.
+type Option func(*Server)
+
+// WithAPIKeys configures API keys for protected custody endpoints.
+func WithAPIKeys(keys []string) Option {
+	return func(server *Server) {
+		server.apiKeys = append([]string(nil), keys...)
+	}
 }
 
 // NewServer creates an HTTP server wrapper.
-func NewServer(service *wallet.Service, metrics *observability.Metrics, logger *slog.Logger) *Server {
-	return &Server{service: service, metrics: metrics, logger: logger}
+func NewServer(service *wallet.Service, metrics *observability.Metrics, logger *slog.Logger, options ...Option) *Server {
+	server := &Server{service: service, metrics: metrics, logger: logger}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 // Handler returns the HTTP handler with observability middleware installed.
@@ -31,10 +48,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("GET /metrics", s.metricsHandler)
-	mux.HandleFunc("POST /v1/wallets", s.createWallet)
-	mux.HandleFunc("POST /v1/transactions", s.proposeTransaction)
-	mux.HandleFunc("GET /v1/transactions/", s.transactionAction)
-	mux.HandleFunc("POST /v1/transactions/", s.transactionAction)
+	mux.HandleFunc("POST /v1/wallets", s.requireAPIKey(s.createWallet))
+	mux.HandleFunc("POST /v1/transactions", s.requireAPIKey(s.proposeTransaction))
+	mux.HandleFunc("GET /v1/audit/events", s.requireAPIKey(s.listAuditEvents))
+	mux.HandleFunc("GET /v1/transactions/", s.requireAPIKey(s.transactionAction))
+	mux.HandleFunc("POST /v1/transactions/", s.requireAPIKey(s.transactionAction))
 	return observability.Middleware(s.metrics, s.logger)(mux)
 }
 
@@ -69,7 +87,7 @@ func (s *Server) createWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := s.service.CreateWallet(r.Context(), request.Chain)
+	created, err := s.service.CreateWallet(r.Context(), request.Chain, idempotencyKey(r))
 	if err != nil {
 		writeError(w, statusFor(err), err)
 		return
@@ -83,7 +101,7 @@ func (s *Server) proposeTransaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proposal, err := s.service.ProposeTransaction(r.Context(), request)
+	proposal, err := s.service.ProposeTransaction(r.Context(), request, idempotencyKey(r))
 	if err != nil {
 		writeError(w, statusFor(err), err)
 		return
@@ -142,6 +160,48 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, id string) {
 	writeJSON(w, http.StatusOK, proposal)
 }
 
+func (s *Server) listAuditEvents(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if rawLimit := r.URL.Query().Get("limit"); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errors.New("limit must be an integer"))
+			return
+		}
+		limit = parsed
+	}
+	events, err := s.service.ListAuditEvents(r.Context(), wallet.AuditFilter{
+		ResourceID: r.URL.Query().Get("resource_id"),
+		Limit:      limit,
+	})
+	if err != nil {
+		writeError(w, statusFor(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(s.apiKeys) == 0 {
+			next(w, r)
+			return
+		}
+
+		provided := r.Header.Get("X-API-Key")
+		if provided == "" {
+			provided = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		}
+		for _, key := range s.apiKeys {
+			if subtle.ConstantTimeCompare([]byte(provided), []byte(key)) == 1 {
+				next(w, r)
+				return
+			}
+		}
+		writeError(w, http.StatusUnauthorized, errors.New("missing or invalid api key"))
+	}
+}
+
 func parseTransactionPath(path string) (string, string, bool) {
 	trimmed := strings.TrimPrefix(path, "/v1/transactions/")
 	if trimmed == path || trimmed == "" {
@@ -179,11 +239,19 @@ func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, errorResponse{Error: err.Error()})
 }
 
+func idempotencyKey(r *http.Request) string {
+	return r.Header.Get("Idempotency-Key")
+}
+
 func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrWalletNotFound), errors.Is(err, store.ErrTransactionNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, wallet.ErrUnsupportedChain), errors.Is(err, wallet.ErrDuplicateApproval), errors.Is(err, wallet.ErrTransactionNotSigned):
+	case errors.Is(err, wallet.ErrUnauthorizedSigner):
+		return http.StatusForbidden
+	case errors.Is(err, store.ErrDuplicateIdempotency):
+		return http.StatusConflict
+	case errors.Is(err, wallet.ErrUnsupportedChain), errors.Is(err, wallet.ErrDuplicateApproval), errors.Is(err, wallet.ErrTransactionNotSigned), errors.Is(err, wallet.ErrPolicyViolation):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
