@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custody-api
+  labels:
+    app: custody-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: custody-api
+  template:
+    metadata:
+      labels:
+        app: custody-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+    spec:
+      containers:
+        - name: custody-api
+          image: ghcr.io/rvmz/mpc-custody:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HTTP_ADDR
+              value: :8080
+            - name: ENVIRONMENT
+              value: k8s
+            - name: BROADCAST_MODE
+              value: mock
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
