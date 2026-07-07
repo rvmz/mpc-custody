@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.yml"
 BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
+API_KEY="${API_KEY:-dev-api-key}"
 
 cleanup() {
   docker compose -f "$COMPOSE_FILE" down >/dev/null
@@ -17,9 +18,11 @@ request() {
   if [[ -n "$body" ]]; then
     curl -fsS -X "$method" "$BASE_URL$path" \
       -H 'content-type: application/json' \
+      -H "X-API-Key: $API_KEY" \
       -d "$body"
   else
-    curl -fsS -X "$method" "$BASE_URL$path"
+    curl -fsS -X "$method" "$BASE_URL$path" \
+      -H "X-API-Key: $API_KEY"
   fi
 }
 
@@ -98,9 +101,16 @@ echo "Bitcoin broadcast: $btc_hash"
 
 echo "Checking persistence..."
 docker compose -f "$COMPOSE_FILE" exec -T postgres \
-  psql -U custody -d custody -c "select count(*) as wallets from wallets; select count(*) as proposals from transaction_proposals;"
+  psql -U custody -d custody -c "select count(*) as wallets from wallets; select count(*) as proposals from transaction_proposals; select count(*) as audit_events from audit_events;"
+
+echo "Checking Bitcoin regtest node..."
+docker compose -f "$COMPOSE_FILE" exec -T bitcoind \
+  bitcoin-cli -regtest -rpcuser=custody -rpcpassword=custody getblockchaininfo >/dev/null
 
 echo "Checking metrics..."
 curl -fsS "$BASE_URL/metrics" | grep -q 'custody_transactions_broadcast_total'
+
+echo "Checking audit API..."
+request GET /v1/audit/events | grep -q 'transaction.broadcast'
 
 echo "Demo completed successfully."
