@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/rvmz/mpc-custody/internal/api"
-	"github.com/rvmz/mpc-custody/internal/chains"
 	"github.com/rvmz/mpc-custody/internal/chains/bitcoin"
 	"github.com/rvmz/mpc-custody/internal/chains/evm"
 	"github.com/rvmz/mpc-custody/internal/observability"
@@ -56,7 +55,7 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func newTestHandler() http.Handler {
 	metrics := observability.NewMetrics()
-	registry := chains.NewRegistry(
+	registry := wallet.NewChainRegistry(
 		bitcoin.NewAdapter("testnet"),
 		evm.NewAdapter(31337),
 	)

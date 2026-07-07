@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/rvmz/mpc-custody/internal/api"
-	"github.com/rvmz/mpc-custody/internal/chains"
 	"github.com/rvmz/mpc-custody/internal/chains/bitcoin"
 	"github.com/rvmz/mpc-custody/internal/chains/evm"
 	"github.com/rvmz/mpc-custody/internal/config"
@@ -26,7 +25,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	metrics := observability.NewMetrics()
 
-	registry := chains.NewRegistry(
+	registry := wallet.NewChainRegistry(
 		bitcoin.NewAdapter("testnet"),
 		evm.NewAdapter(31337),
 	)

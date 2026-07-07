@@ -2,6 +2,7 @@
 package wallet
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -39,6 +40,24 @@ type Wallet struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// WalletMaterial contains public wallet data created by a signing backend.
+type WalletMaterial struct {
+	Address   string
+	PublicKey string
+}
+
+// Signature contains a signed transaction payload.
+type Signature struct {
+	SignedTransaction string
+	SignatureID       string
+}
+
+// SigningBackend creates wallets and signs transactions once quorum is reached.
+type SigningBackend interface {
+	CreateWallet(ctx context.Context, walletID string, chain Chain) (WalletMaterial, error)
+	SignTransaction(ctx context.Context, proposal TransactionProposal) (Signature, error)
+}
+
 // UTXO describes a spendable Bitcoin output selected by the caller.
 type UTXO struct {
 	TxID         string `json:"tx_id"`
@@ -74,19 +93,19 @@ type RawTransaction struct {
 
 // TransactionProposal stores the current state of a proposed transaction.
 type TransactionProposal struct {
-	ID               string                       `json:"id"`
-	WalletID         string                       `json:"wallet_id"`
-	Chain            Chain                        `json:"chain"`
-	Status           TransactionStatus           `json:"status"`
-	Request          TransactionRequest          `json:"request"`
-	RawTransaction   RawTransaction              `json:"raw_transaction"`
-	Approvals        map[string]Approval         `json:"approvals"`
-	SignedTransaction string                       `json:"signed_transaction,omitempty"`
-	BroadcastHash     string                       `json:"broadcast_hash,omitempty"`
-	Error             string                       `json:"error,omitempty"`
-	Trace             map[string]string          `json:"trace,omitempty"`
-	CreatedAt         time.Time                  `json:"created_at"`
-	UpdatedAt         time.Time                  `json:"updated_at"`
+	ID                string              `json:"id"`
+	WalletID          string              `json:"wallet_id"`
+	Chain             Chain               `json:"chain"`
+	Status            TransactionStatus   `json:"status"`
+	Request           TransactionRequest  `json:"request"`
+	RawTransaction    RawTransaction      `json:"raw_transaction"`
+	Approvals         map[string]Approval `json:"approvals"`
+	SignedTransaction string              `json:"signed_transaction,omitempty"`
+	BroadcastHash     string              `json:"broadcast_hash,omitempty"`
+	Error             string              `json:"error,omitempty"`
+	Trace             map[string]string   `json:"trace,omitempty"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
 }
 
 // ApprovalsCount returns the current number of unique signer approvals.

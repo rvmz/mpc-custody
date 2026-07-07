@@ -44,16 +44,16 @@ func NewDemoQuorumBackend() *DemoQuorumBackend {
 }
 
 // CreateWallet creates demo wallet material for a chain.
-func (b *DemoQuorumBackend) CreateWallet(ctx context.Context, walletID string, chain wallet.Chain) (WalletMaterial, error) {
+func (b *DemoQuorumBackend) CreateWallet(ctx context.Context, walletID string, chain wallet.Chain) (wallet.WalletMaterial, error) {
 	select {
 	case <-ctx.Done():
-		return WalletMaterial{}, ctx.Err()
+		return wallet.WalletMaterial{}, ctx.Err()
 	default:
 	}
 
 	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return WalletMaterial{}, err
+		return wallet.WalletMaterial{}, err
 	}
 
 	publicKey := encodePublicKey(private.PublicKey)
@@ -69,36 +69,36 @@ func (b *DemoQuorumBackend) CreateWallet(ctx context.Context, walletID string, c
 	defer b.mu.Unlock()
 	b.records[walletID] = record
 
-	return WalletMaterial{Address: address, PublicKey: publicKey}, nil
+	return wallet.WalletMaterial{Address: address, PublicKey: publicKey}, nil
 }
 
 // SignTransaction returns a demo signature when at least two unique approvals are present.
-func (b *DemoQuorumBackend) SignTransaction(ctx context.Context, proposal wallet.TransactionProposal) (Signature, error) {
+func (b *DemoQuorumBackend) SignTransaction(ctx context.Context, proposal wallet.TransactionProposal) (wallet.Signature, error) {
 	select {
 	case <-ctx.Done():
-		return Signature{}, ctx.Err()
+		return wallet.Signature{}, ctx.Err()
 	default:
 	}
 
 	if proposal.ApprovalsCount() < quorumThreshold {
-		return Signature{}, errors.New("2-of-3 quorum has not been reached")
+		return wallet.Signature{}, errors.New("2-of-3 quorum has not been reached")
 	}
 
 	b.mu.RLock()
 	record, ok := b.records[proposal.WalletID]
 	b.mu.RUnlock()
 	if !ok {
-		return Signature{}, errors.New("signing wallet material not found")
+		return wallet.Signature{}, errors.New("signing wallet material not found")
 	}
 
 	digest := sha256.Sum256(proposal.RawTransaction.Payload)
 	r, s, err := ecdsa.Sign(rand.Reader, record.private, digest[:])
 	if err != nil {
-		return Signature{}, err
+		return wallet.Signature{}, err
 	}
 	encodedSignature, err := asn1.Marshal(ecdsaSignature{R: r, S: s})
 	if err != nil {
-		return Signature{}, err
+		return wallet.Signature{}, err
 	}
 
 	envelope := map[string]any{
@@ -112,11 +112,11 @@ func (b *DemoQuorumBackend) SignTransaction(ctx context.Context, proposal wallet
 	}
 	payload, err := json.Marshal(envelope)
 	if err != nil {
-		return Signature{}, err
+		return wallet.Signature{}, err
 	}
 
 	signatureID := sha256.Sum256(payload)
-	return Signature{
+	return wallet.Signature{
 		SignedTransaction: hex.EncodeToString(payload),
 		SignatureID:       hex.EncodeToString(signatureID[:]),
 	}, nil

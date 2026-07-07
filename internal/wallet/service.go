@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rvmz/mpc-custody/internal/chains"
 	"github.com/rvmz/mpc-custody/internal/ids"
 	"github.com/rvmz/mpc-custody/internal/observability"
-	"github.com/rvmz/mpc-custody/internal/signing"
-	"github.com/rvmz/mpc-custody/internal/store"
 )
 
 var (
@@ -23,17 +20,53 @@ var (
 	ErrTransactionNotSigned = errors.New("transaction is not signed")
 )
 
+// Store persists wallets and transaction proposals for the orchestration service.
+type Store interface {
+	CreateWallet(ctx context.Context, wallet Wallet) error
+	GetWallet(ctx context.Context, id string) (Wallet, error)
+	CreateTransaction(ctx context.Context, proposal TransactionProposal) error
+	GetTransaction(ctx context.Context, id string) (TransactionProposal, error)
+	UpdateTransaction(ctx context.Context, proposal TransactionProposal) error
+}
+
+// ChainAdapter builds and broadcasts transactions for one blockchain family.
+type ChainAdapter interface {
+	Chain() Chain
+	BuildTransaction(ctx context.Context, source Wallet, request TransactionRequest) (RawTransaction, error)
+	Broadcast(ctx context.Context, signedTransaction string) (string, error)
+}
+
+// ChainRegistry routes wallet operations to chain-specific adapters.
+type ChainRegistry struct {
+	adapters map[Chain]ChainAdapter
+}
+
+// NewChainRegistry creates a chain adapter registry.
+func NewChainRegistry(adapters ...ChainAdapter) *ChainRegistry {
+	registry := &ChainRegistry{adapters: make(map[Chain]ChainAdapter, len(adapters))}
+	for _, adapter := range adapters {
+		registry.adapters[adapter.Chain()] = adapter
+	}
+	return registry
+}
+
+// Get returns an adapter for a chain.
+func (r *ChainRegistry) Get(chain Chain) (ChainAdapter, bool) {
+	adapter, ok := r.adapters[chain]
+	return adapter, ok
+}
+
 // Service orchestrates wallets, transaction proposals, signing, and broadcast.
 type Service struct {
-	store   store.Store
-	chains  *chains.Registry
-	signer  signing.Backend
+	store   Store
+	chains  *ChainRegistry
+	signer  SigningBackend
 	metrics *observability.Metrics
 	now     func() time.Time
 }
 
 // NewService creates a wallet orchestration service.
-func NewService(store store.Store, registry *chains.Registry, signer signing.Backend, metrics *observability.Metrics) *Service {
+func NewService(store Store, registry *ChainRegistry, signer SigningBackend, metrics *observability.Metrics) *Service {
 	return &Service{
 		store:   store,
 		chains:  registry,
