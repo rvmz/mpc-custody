@@ -17,6 +17,8 @@ The first version does not implement MPC cryptography. Implementing GG20 or CGGM
 
 The demo signer uses a local ECDSA key and only signs after two unique signer approvals. It is useful for API and workflow demonstrations, not for holding funds.
 
+For EVM demos, the signer can use `EVM_DEV_PRIVATE_KEY`, which Docker Compose sets to Anvil's default funded account. That makes the local EVM flow broadcastable while keeping the key clearly scoped to development.
+
 ## Core Flow
 
 ```mermaid
@@ -56,7 +58,7 @@ sequenceDiagram
 
 Bitcoin-style UTXO chains require explicit inputs. The service expects selected UTXOs in the proposal and validates that a fee rate is present. A production version would add coin selection, dust handling, change output construction, script policy checks, and RPC-backed UTXO discovery.
 
-EVM chains are account-based. The adapter tracks nonces per wallet address and requires gas limit plus max fee per gas. A production version would replace local nonce tracking with RPC reads, pending nonce reconciliation, gas estimation, replacement transaction handling, and chain ID specific signing.
+EVM chains are account-based. When `EVM_RPC_URL` is configured, the adapter reads chain ID, pending nonce, gas limit, and gas price data from JSON-RPC, then broadcasts signed raw transactions with `eth_sendRawTransaction`. Without RPC, it falls back to local nonce tracking and explicit gas fields for fast unit tests.
 
 ## Signing Boundary
 
@@ -93,7 +95,7 @@ If `DATABASE_URL` is not configured, the service falls back to an in-memory stor
 The next production-oriented steps are:
 
 - Add idempotency keys and a normalized signer approval audit table.
-- Replace mock broadcast with Bitcoin Core/regtest and EVM JSON-RPC clients.
+- Replace mock Bitcoin broadcast with Bitcoin Core/regtest.
 - Integrate a reviewed threshold ECDSA implementation or an external MPC signer.
 - Add authentication, signer authorization, policy limits, and audit log export.
 - Add OpenTelemetry exporters when external dependencies are allowed.

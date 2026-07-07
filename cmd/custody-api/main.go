@@ -35,12 +35,17 @@ func main() {
 
 	registry := wallet.NewChainRegistry(
 		bitcoin.NewAdapter("testnet"),
-		evm.NewAdapter(31337),
+		evm.NewAdapter(cfg.EVMChainID, cfg.EVMRPCURL),
 	)
+	signer, err := signing.NewDemoQuorumBackend(signing.WithEVMPrivateKey(cfg.EVMDevPrivateKey))
+	if err != nil {
+		logger.Error("create signer failed", "error", err)
+		os.Exit(1)
+	}
 	service := wallet.NewService(
 		custodyStore,
 		registry,
-		signing.NewDemoQuorumBackend(),
+		signer,
 		metrics,
 	)
 	apiServer := api.NewServer(service, metrics, logger)
@@ -57,6 +62,7 @@ func main() {
 			"service", cfg.ServiceName,
 			"environment", cfg.Environment,
 			"broadcast_mode", cfg.BroadcastMode,
+			"evm_rpc_configured", cfg.EVMRPCURL != "",
 		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("http server failed", "error", err)

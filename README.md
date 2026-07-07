@@ -36,7 +36,7 @@ flowchart LR
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-The Compose stack starts the API, Postgres, and Prometheus. The API runs migrations automatically when `DATABASE_URL` is set.
+The Compose stack starts the API, Postgres, Anvil, and Prometheus. The API runs migrations automatically when `DATABASE_URL` is set and uses Anvil for EVM nonce, gas, signing, and broadcast demos.
 
 Create an EVM wallet:
 
@@ -104,7 +104,7 @@ Bitcoin proposals require caller-selected UTXOs so the service can show the UTXO
 ## Trade-Offs
 
 - The demo signer uses a local development key after quorum is reached. It is not MPC and should not secure funds.
-- Broadcast is deterministic and mocked so the repository runs without node credentials.
+- Bitcoin broadcast is deterministic and mocked so the repository runs without Bitcoin node credentials. EVM broadcast uses Anvil in Docker Compose when `EVM_RPC_URL` is set.
 - Docker Compose uses Postgres-backed persistence. Running the binary without `DATABASE_URL` falls back to in-memory storage for quick demos and tests.
 - The EVM adapter models nonce and EIP-1559 fields; the Bitcoin adapter models UTXO selection and fee-rate requirements.
 
@@ -124,4 +124,4 @@ kubectl apply -f deploy/k8s
 
 Set `image` in `deploy/k8s/deployment.yaml` to the registry tag you publish.
 
-For Kubernetes, provide a `custody-api-database` Secret with a `database-url` key to enable durable persistence. Without that Secret, the service starts with its in-memory fallback.
+For Kubernetes, provide a `custody-api-database` Secret with a `database-url` key to enable durable persistence. Provide a `custody-api-evm` Secret with `rpc-url` and `dev-private-key` keys to enable EVM RPC broadcast in a demo cluster. Without those Secrets, the service starts with its local fallbacks.

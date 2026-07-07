@@ -59,10 +59,14 @@ func newTestHandler() http.Handler {
 		bitcoin.NewAdapter("testnet"),
 		evm.NewAdapter(31337),
 	)
+	signer, err := signing.NewDemoQuorumBackend()
+	if err != nil {
+		panic(err)
+	}
 	service := wallet.NewService(
 		store.NewMemoryStore(),
 		registry,
-		signing.NewDemoQuorumBackend(),
+		signer,
 		metrics,
 	)
 	logger := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))

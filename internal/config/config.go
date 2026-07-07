@@ -14,6 +14,9 @@ type Config struct {
 	Environment       string
 	BroadcastMode     string
 	DatabaseURL       string
+	EVMRPCURL         string
+	EVMChainID        uint64
+	EVMDevPrivateKey  string
 	ShutdownGraceTime time.Duration
 }
 
@@ -25,6 +28,9 @@ func Load() Config {
 		Environment:       env("ENVIRONMENT", "local"),
 		BroadcastMode:     env("BROADCAST_MODE", "mock"),
 		DatabaseURL:       env("DATABASE_URL", ""),
+		EVMRPCURL:         env("EVM_RPC_URL", ""),
+		EVMChainID:        envUint64("EVM_CHAIN_ID", 31337),
+		EVMDevPrivateKey:  env("EVM_DEV_PRIVATE_KEY", ""),
 		ShutdownGraceTime: envDuration("SHUTDOWN_GRACE_SECONDS", 10*time.Second),
 	}
 }
@@ -48,4 +54,17 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func envUint64(key string, fallback uint64) uint64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || parsed == 0 {
+		return fallback
+	}
+	return parsed
 }

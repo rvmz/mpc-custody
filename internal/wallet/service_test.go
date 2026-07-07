@@ -3,6 +3,7 @@ package wallet_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/rvmz/mpc-custody/internal/chains/bitcoin"
@@ -50,6 +51,9 @@ func TestEVMProposalRequiresTwoApprovalsBeforeBroadcast(t *testing.T) {
 	}
 	if proposal.SignedTransaction == "" {
 		t.Fatal("signed transaction is empty")
+	}
+	if !strings.HasPrefix(proposal.SignedTransaction, "0x") {
+		t.Fatalf("signed EVM transaction = %q, want raw hex transaction", proposal.SignedTransaction)
 	}
 
 	proposal, err = service.Broadcast(ctx, proposal.ID)
@@ -113,10 +117,14 @@ func newTestService() *wallet.Service {
 		bitcoin.NewAdapter("testnet"),
 		evm.NewAdapter(31337),
 	)
+	signer, err := signing.NewDemoQuorumBackend()
+	if err != nil {
+		panic(err)
+	}
 	return wallet.NewService(
 		store.NewMemoryStore(),
 		registry,
-		signing.NewDemoQuorumBackend(),
+		signer,
 		observability.NewMetrics(),
 	)
 }

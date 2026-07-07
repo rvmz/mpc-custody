@@ -91,6 +91,22 @@ type RawTransaction struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// EVMTransactionPayload is the unsigned EIP-1559 transaction model used by the EVM adapter.
+type EVMTransactionPayload struct {
+	Chain                Chain  `json:"chain"`
+	ChainID              uint64 `json:"chain_id"`
+	From                 string `json:"from"`
+	To                   string `json:"to"`
+	ValueWei             string `json:"value_wei"`
+	Nonce                uint64 `json:"nonce"`
+	GasLimit             uint64 `json:"gas_limit"`
+	MaxFeePerGas         string `json:"max_fee_per_gas"`
+	MaxPriorityFeePerGas string `json:"max_priority_fee_per_gas"`
+	Data                 string `json:"data"`
+	Type                 string `json:"type"`
+	CreatedAt            string `json:"created_at"`
+}
+
 // TransactionProposal stores the current state of a proposed transaction.
 type TransactionProposal struct {
 	ID                string              `json:"id"`
