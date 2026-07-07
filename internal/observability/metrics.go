@@ -70,8 +70,8 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 		if count == 0 {
 			continue
 		}
-		fmt.Fprintf(w, "%s_count %d\n", key, count)
-		fmt.Fprintf(w, "%s_sum %g\n", key, total.Seconds())
+		fmt.Fprintf(w, "%s %d\n", sampleKey(key, "_count"), count)
+		fmt.Fprintf(w, "%s %g\n", sampleKey(key, "_sum"), total.Seconds())
 	}
 }
 
@@ -92,4 +92,12 @@ func metricKey(name string, labels map[string]string) string {
 		parts = append(parts, fmt.Sprintf(`%s="%s"`, key, value))
 	}
 	return fmt.Sprintf("%s{%s}", name, strings.Join(parts, ","))
+}
+
+func sampleKey(key string, suffix string) string {
+	labelStart := strings.IndexByte(key, '{')
+	if labelStart == -1 {
+		return key + suffix
+	}
+	return key[:labelStart] + suffix + key[labelStart:]
 }

@@ -4,6 +4,7 @@ package wallet_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rvmz/mpc-custody/internal/chains/bitcoin"
@@ -126,6 +127,95 @@ func TestIdempotentWalletCreationReturnsSameWallet(t *testing.T) {
 	}
 	if first.ID != second.ID {
 		t.Fatalf("wallet ids differ: %s != %s", first.ID, second.ID)
+	}
+}
+
+func TestConcurrentApprovalsAreBothPreserved(t *testing.T) {
+	service := newTestService()
+	ctx := context.Background()
+
+	created, err := service.CreateWallet(ctx, wallet.ChainEVM, "")
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	proposal, err := service.ProposeTransaction(ctx, wallet.TransactionRequest{
+		WalletID:     created.ID,
+		To:           "0x1111111111111111111111111111111111111111",
+		Amount:       "1",
+		GasLimit:     21000,
+		MaxFeePerGas: "1",
+	}, "")
+	if err != nil {
+		t.Fatalf("propose transaction: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, signerID := range []string{"alice", "bob"} {
+		wg.Add(1)
+		go func(signerID string) {
+			defer wg.Done()
+			_, err := service.CoSign(ctx, proposal.ID, signerID)
+			errs <- err
+		}(signerID)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("cosign: %v", err)
+		}
+	}
+
+	stored, err := service.GetTransaction(ctx, proposal.ID)
+	if err != nil {
+		t.Fatalf("get transaction: %v", err)
+	}
+	if stored.ApprovalsCount() != 2 {
+		t.Fatalf("approvals = %d, want 2: %+v", stored.ApprovalsCount(), stored.Approvals)
+	}
+	if stored.Status != wallet.TransactionStatusSigned {
+		t.Fatalf("status = %s, want %s", stored.Status, wallet.TransactionStatusSigned)
+	}
+}
+
+func TestTransactionAmountsMustBePositiveWithoutPolicyCaps(t *testing.T) {
+	service := newTestService()
+	ctx := context.Background()
+
+	created, err := service.CreateWallet(ctx, wallet.ChainEVM, "")
+	if err != nil {
+		t.Fatalf("create wallet: %v", err)
+	}
+	_, err = service.ProposeTransaction(ctx, wallet.TransactionRequest{
+		WalletID:     created.ID,
+		To:           "0x1111111111111111111111111111111111111111",
+		Amount:       "0",
+		GasLimit:     21000,
+		MaxFeePerGas: "1",
+	}, "")
+	if err == nil {
+		t.Fatal("expected zero EVM amount error")
+	}
+
+	created, err = service.CreateWallet(ctx, wallet.ChainBitcoin, "")
+	if err != nil {
+		t.Fatalf("create bitcoin wallet: %v", err)
+	}
+	_, err = service.ProposeTransaction(ctx, wallet.TransactionRequest{
+		WalletID:    created.ID,
+		To:          "tb1qrecipient",
+		Amount:      "-1",
+		FeeRateSats: 5,
+		UTXOs: []wallet.UTXO{{
+			TxID:         "tx",
+			Vout:         0,
+			AmountSats:   1000,
+			ScriptPubKey: "script",
+		}},
+	}, "")
+	if err == nil {
+		t.Fatal("expected negative bitcoin amount error")
 	}
 }
 

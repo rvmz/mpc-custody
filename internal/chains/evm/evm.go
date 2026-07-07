@@ -64,8 +64,8 @@ func (a *Adapter) BuildTransaction(ctx context.Context, source wallet.Wallet, re
 		return wallet.RawTransaction{}, errors.New("evm amount is required")
 	}
 	valueWei, ok := new(big.Int).SetString(request.Amount, 10)
-	if !ok {
-		return wallet.RawTransaction{}, errors.New("evm amount must be a base-10 wei value")
+	if !ok || valueWei.Sign() <= 0 {
+		return wallet.RawTransaction{}, errors.New("evm amount must be a positive base-10 wei value")
 	}
 
 	payload := wallet.EVMTransactionPayload{

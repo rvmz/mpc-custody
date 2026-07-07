@@ -72,6 +72,37 @@ func TestAPIKeyProtectsWalletEndpoint(t *testing.T) {
 	}
 }
 
+func TestAuthorizationHeaderRequiresBearerScheme(t *testing.T) {
+	handler := newAuthTestHandler()
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/wallets", bytes.NewBufferString(`{"chain":"evm"}`))
+	request.Header.Set("Authorization", "test-key")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("raw authorization status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/v1/wallets", bytes.NewBufferString(`{"chain":"evm"}`))
+	request.Header.Set("Authorization", "Bearer test-key")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("bearer authorization status = %d, want %d: %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+}
+
+func TestDecodeJSONRejectsTrailingTokens(t *testing.T) {
+	handler := newTestHandler()
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/wallets", bytes.NewBufferString(`{"chain":"evm"} {"chain":"bitcoin"}`))
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
 func newTestHandler() http.Handler {
 	metrics := observability.NewMetrics()
 	registry := wallet.NewChainRegistry(

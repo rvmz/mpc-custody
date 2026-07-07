@@ -21,6 +21,8 @@ var (
 	ErrDuplicateApproval = errors.New("signer already approved proposal")
 	// ErrTransactionNotSigned is returned when broadcast is requested before signing.
 	ErrTransactionNotSigned = errors.New("transaction is not signed")
+	// ErrTransactionNotProposed is returned when approval is requested for a closed proposal.
+	ErrTransactionNotProposed = errors.New("transaction is not accepting approvals")
 	// ErrUnauthorizedSigner is returned when a signer is not allowed by policy.
 	ErrUnauthorizedSigner = errors.New("signer is not authorized")
 	// ErrPolicyViolation is returned when a transaction violates custody policy.
@@ -30,14 +32,16 @@ var (
 // Store persists wallets and transaction proposals for the orchestration service.
 type Store interface {
 	CreateWallet(ctx context.Context, wallet Wallet) error
+	CreateWalletIdempotently(ctx context.Context, wallet Wallet, record IdempotencyRecord) (Wallet, bool, error)
 	GetWallet(ctx context.Context, id string) (Wallet, error)
 	CreateTransaction(ctx context.Context, proposal TransactionProposal) error
+	CreateTransactionIdempotently(ctx context.Context, proposal TransactionProposal, record IdempotencyRecord) (TransactionProposal, bool, error)
 	GetTransaction(ctx context.Context, id string) (TransactionProposal, error)
+	AddApproval(ctx context.Context, transactionID string, approval Approval) (TransactionProposal, error)
+	MarkTransactionSigned(ctx context.Context, transactionID string, signedTransaction string) (TransactionProposal, bool, error)
 	UpdateTransaction(ctx context.Context, proposal TransactionProposal) error
 	AppendAuditEvent(ctx context.Context, event AuditEvent) error
 	ListAuditEvents(ctx context.Context, filter AuditFilter) ([]AuditEvent, error)
-	SaveIdempotency(ctx context.Context, record IdempotencyRecord) error
-	GetIdempotency(ctx context.Context, scope string, key string) (IdempotencyRecord, error)
 }
 
 // ChainAdapter builds and broadcasts transactions for one blockchain family.
@@ -114,9 +118,6 @@ func (s *Service) CreateWallet(ctx context.Context, chain Chain, idempotencyKey 
 	if _, ok := s.chains.Get(chain); !ok {
 		return Wallet{}, fmt.Errorf("%w: %s", ErrUnsupportedChain, chain)
 	}
-	if existing, ok, err := s.getIdempotentWallet(ctx, "wallet:"+string(chain), idempotencyKey); ok || err != nil {
-		return existing, err
-	}
 
 	id, err := ids.New("wlt")
 	if err != nil {
@@ -134,11 +135,25 @@ func (s *Service) CreateWallet(ctx context.Context, chain Chain, idempotencyKey 
 		PublicKey: material.PublicKey,
 		CreatedAt: s.now(),
 	}
-	if err := s.store.CreateWallet(ctx, w); err != nil {
-		return Wallet{}, err
+	created := true
+	if idempotencyKey == "" {
+		if err := s.store.CreateWallet(ctx, w); err != nil {
+			return Wallet{}, err
+		}
+	} else {
+		w, created, err = s.store.CreateWalletIdempotently(ctx, w, IdempotencyRecord{
+			Scope:        "wallet:" + string(chain),
+			Key:          idempotencyKey,
+			ResourceType: "wallet",
+			ResourceID:   w.ID,
+			CreatedAt:    s.now(),
+		})
+		if err != nil {
+			return Wallet{}, err
+		}
 	}
-	if err := s.saveIdempotency(ctx, "wallet:"+string(chain), idempotencyKey, "wallet", w.ID); err != nil {
-		return Wallet{}, err
+	if !created {
+		return w, nil
 	}
 	if err := s.appendAudit(ctx, AuditEvent{
 		Type:         AuditEventWalletCreated,
@@ -158,9 +173,6 @@ func (s *Service) ProposeTransaction(ctx context.Context, request TransactionReq
 	source, err := s.store.GetWallet(ctx, request.WalletID)
 	if err != nil {
 		return TransactionProposal{}, err
-	}
-	if existing, ok, err := s.getIdempotentTransaction(ctx, "transaction:"+request.WalletID, idempotencyKey); ok || err != nil {
-		return existing, err
 	}
 	if err := s.validateAmountPolicy(source.Chain, request.Amount); err != nil {
 		return TransactionProposal{}, err
@@ -196,11 +208,25 @@ func (s *Service) ProposeTransaction(ctx context.Context, request TransactionReq
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.store.CreateTransaction(ctx, proposal); err != nil {
-		return TransactionProposal{}, err
+	created := true
+	if idempotencyKey == "" {
+		if err := s.store.CreateTransaction(ctx, proposal); err != nil {
+			return TransactionProposal{}, err
+		}
+	} else {
+		proposal, created, err = s.store.CreateTransactionIdempotently(ctx, proposal, IdempotencyRecord{
+			Scope:        "transaction:" + request.WalletID,
+			Key:          idempotencyKey,
+			ResourceType: "transaction",
+			ResourceID:   proposal.ID,
+			CreatedAt:    now,
+		})
+		if err != nil {
+			return TransactionProposal{}, err
+		}
 	}
-	if err := s.saveIdempotency(ctx, "transaction:"+request.WalletID, idempotencyKey, "transaction", proposal.ID); err != nil {
-		return TransactionProposal{}, err
+	if !created {
+		return proposal, nil
 	}
 	if err := s.appendAudit(ctx, AuditEvent{
 		Type:         AuditEventTransactionProposed,
@@ -224,19 +250,10 @@ func (s *Service) CoSign(ctx context.Context, transactionID string, signerID str
 	if !s.signerAllowed(signerID) {
 		return TransactionProposal{}, fmt.Errorf("%w: %s", ErrUnauthorizedSigner, signerID)
 	}
-	proposal, err := s.store.GetTransaction(ctx, transactionID)
+	proposal, err := s.store.AddApproval(ctx, transactionID, Approval{SignerID: signerID, CreatedAt: s.now()})
 	if err != nil {
 		return TransactionProposal{}, err
 	}
-	if proposal.Approvals == nil {
-		proposal.Approvals = make(map[string]Approval)
-	}
-	if _, ok := proposal.Approvals[signerID]; ok {
-		return TransactionProposal{}, ErrDuplicateApproval
-	}
-
-	proposal.Approvals[signerID] = Approval{SignerID: signerID, CreatedAt: s.now()}
-	proposal.UpdatedAt = s.now()
 	s.metrics.Inc("custody_transaction_approvals_total", map[string]string{"chain": string(proposal.Chain)})
 	if err := s.appendAudit(ctx, AuditEvent{
 		Type:         AuditEventTransactionApproved,
@@ -251,9 +268,7 @@ func (s *Service) CoSign(ctx context.Context, transactionID string, signerID str
 	if proposal.Status == TransactionStatusProposed && proposal.ApprovalsCount() >= 2 {
 		signature, err := s.signer.SignTransaction(ctx, proposal)
 		if err != nil {
-			proposal.Status = TransactionStatusFailed
-			proposal.Error = err.Error()
-			_ = s.store.UpdateTransaction(ctx, proposal)
+			_ = s.failTransaction(ctx, proposal, err, "sign")
 			_ = s.appendAudit(ctx, AuditEvent{
 				Type:         AuditEventTransactionFailed,
 				ResourceType: "transaction",
@@ -263,24 +278,27 @@ func (s *Service) CoSign(ctx context.Context, transactionID string, signerID str
 			})
 			return TransactionProposal{}, err
 		}
-		proposal.Status = TransactionStatusSigned
-		proposal.SignedTransaction = signature.SignedTransaction
-		proposal.UpdatedAt = s.now()
-		s.metrics.Inc("custody_transactions_signed_total", map[string]string{"chain": string(proposal.Chain)})
-		if err := s.appendAudit(ctx, AuditEvent{
-			Type:         AuditEventTransactionSigned,
-			ResourceType: "transaction",
-			ResourceID:   proposal.ID,
-			Chain:        proposal.Chain,
-			Metadata:     mustJSON(map[string]string{"signature_id": signature.SignatureID}),
-		}); err != nil {
+		signedProposal, signed, err := s.store.MarkTransactionSigned(ctx, proposal.ID, signature.SignedTransaction)
+		if err != nil {
 			return TransactionProposal{}, err
+		}
+		if signed {
+			proposal = signedProposal
+			s.metrics.Inc("custody_transactions_signed_total", map[string]string{"chain": string(proposal.Chain)})
+			if err := s.appendAudit(ctx, AuditEvent{
+				Type:         AuditEventTransactionSigned,
+				ResourceType: "transaction",
+				ResourceID:   proposal.ID,
+				Chain:        proposal.Chain,
+				Metadata:     mustJSON(map[string]string{"signature_id": signature.SignatureID}),
+			}); err != nil {
+				return TransactionProposal{}, err
+			}
+		} else {
+			proposal = signedProposal
 		}
 	}
 
-	if err := s.store.UpdateTransaction(ctx, proposal); err != nil {
-		return TransactionProposal{}, err
-	}
 	return proposal, nil
 }
 
@@ -300,9 +318,7 @@ func (s *Service) Broadcast(ctx context.Context, transactionID string) (Transact
 	}
 	hash, err := adapter.Broadcast(ctx, proposal.SignedTransaction)
 	if err != nil {
-		proposal.Status = TransactionStatusFailed
-		proposal.Error = err.Error()
-		_ = s.store.UpdateTransaction(ctx, proposal)
+		_ = s.failTransaction(ctx, proposal, err, "broadcast")
 		_ = s.appendAudit(ctx, AuditEvent{
 			Type:         AuditEventTransactionFailed,
 			ResourceType: "transaction",
@@ -343,6 +359,16 @@ func (s *Service) ListAuditEvents(ctx context.Context, filter AuditFilter) ([]Au
 	return s.store.ListAuditEvents(ctx, filter)
 }
 
+func (s *Service) failTransaction(ctx context.Context, proposal TransactionProposal, cause error, phase string) error {
+	proposal.Status = TransactionStatusFailed
+	proposal.Error = cause.Error()
+	proposal.UpdatedAt = s.now()
+	if err := s.store.UpdateTransaction(ctx, proposal); err != nil {
+		return fmt.Errorf("%s failed and status update failed: %w", phase, err)
+	}
+	return nil
+}
+
 func (s *Service) appendAudit(ctx context.Context, event AuditEvent) error {
 	id, err := ids.New("aud")
 	if err != nil {
@@ -357,49 +383,6 @@ func (s *Service) appendAudit(ctx context.Context, event AuditEvent) error {
 	return nil
 }
 
-func (s *Service) getIdempotentWallet(ctx context.Context, scope string, key string) (Wallet, bool, error) {
-	if key == "" {
-		return Wallet{}, false, nil
-	}
-	record, err := s.store.GetIdempotency(ctx, scope, key)
-	if err != nil {
-		return Wallet{}, false, err
-	}
-	if record.ResourceID == "" {
-		return Wallet{}, false, nil
-	}
-	w, err := s.store.GetWallet(ctx, record.ResourceID)
-	return w, true, err
-}
-
-func (s *Service) getIdempotentTransaction(ctx context.Context, scope string, key string) (TransactionProposal, bool, error) {
-	if key == "" {
-		return TransactionProposal{}, false, nil
-	}
-	record, err := s.store.GetIdempotency(ctx, scope, key)
-	if err != nil {
-		return TransactionProposal{}, false, err
-	}
-	if record.ResourceID == "" {
-		return TransactionProposal{}, false, nil
-	}
-	proposal, err := s.store.GetTransaction(ctx, record.ResourceID)
-	return proposal, true, err
-}
-
-func (s *Service) saveIdempotency(ctx context.Context, scope string, key string, resourceType string, resourceID string) error {
-	if key == "" {
-		return nil
-	}
-	return s.store.SaveIdempotency(ctx, IdempotencyRecord{
-		Scope:        scope,
-		Key:          key,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
-		CreatedAt:    s.now(),
-	})
-}
-
 func (s *Service) signerAllowed(signerID string) bool {
 	if len(s.policy.AllowedSigners) == 0 {
 		return true
@@ -411,25 +394,19 @@ func (s *Service) signerAllowed(signerID string) bool {
 func (s *Service) validateAmountPolicy(chain Chain, amount string) error {
 	switch chain {
 	case ChainBitcoin:
-		if s.policy.MaxBitcoinAmountSats <= 0 {
-			return nil
-		}
 		value, err := strconv.ParseInt(amount, 10, 64)
-		if err != nil {
-			return fmt.Errorf("%w: bitcoin amount must be base-10 sats", ErrPolicyViolation)
+		if err != nil || value <= 0 {
+			return fmt.Errorf("%w: bitcoin amount must be positive base-10 sats", ErrPolicyViolation)
 		}
-		if value > s.policy.MaxBitcoinAmountSats {
+		if s.policy.MaxBitcoinAmountSats > 0 && value > s.policy.MaxBitcoinAmountSats {
 			return fmt.Errorf("%w: bitcoin amount exceeds limit", ErrPolicyViolation)
 		}
 	case ChainEVM:
-		if s.policy.MaxEVMAmountWei == nil {
-			return nil
-		}
 		value, ok := new(big.Int).SetString(amount, 10)
-		if !ok {
-			return fmt.Errorf("%w: evm amount must be base-10 wei", ErrPolicyViolation)
+		if !ok || value.Sign() <= 0 {
+			return fmt.Errorf("%w: evm amount must be positive base-10 wei", ErrPolicyViolation)
 		}
-		if value.Cmp(s.policy.MaxEVMAmountWei) > 0 {
+		if s.policy.MaxEVMAmountWei != nil && value.Cmp(s.policy.MaxEVMAmountWei) > 0 {
 			return fmt.Errorf("%w: evm amount exceeds limit", ErrPolicyViolation)
 		}
 	}

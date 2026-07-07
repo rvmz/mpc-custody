@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -189,7 +190,7 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		provided := r.Header.Get("X-API-Key")
-		if provided == "" {
+		if provided == "" && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			provided = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		}
 		for _, key := range s.apiKeys {
@@ -226,6 +227,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 		writeError(w, http.StatusBadRequest, err)
 		return false
 	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, errors.New("request body must contain a single json object"))
+		return false
+	}
 	return true
 }
 
@@ -251,7 +256,7 @@ func statusFor(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, store.ErrDuplicateIdempotency):
 		return http.StatusConflict
-	case errors.Is(err, wallet.ErrUnsupportedChain), errors.Is(err, wallet.ErrDuplicateApproval), errors.Is(err, wallet.ErrTransactionNotSigned), errors.Is(err, wallet.ErrPolicyViolation):
+	case errors.Is(err, wallet.ErrUnsupportedChain), errors.Is(err, wallet.ErrDuplicateApproval), errors.Is(err, wallet.ErrTransactionNotSigned), errors.Is(err, wallet.ErrTransactionNotProposed), errors.Is(err, wallet.ErrPolicyViolation):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError

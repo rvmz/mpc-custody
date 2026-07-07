@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/rvmz/mpc-custody/internal/wallet"
@@ -45,6 +46,10 @@ func (a *Adapter) BuildTransaction(ctx context.Context, source wallet.Wallet, re
 	if request.Amount == "" {
 		return wallet.RawTransaction{}, errors.New("bitcoin amount is required")
 	}
+	amountSats, err := strconv.ParseInt(request.Amount, 10, 64)
+	if err != nil || amountSats <= 0 {
+		return wallet.RawTransaction{}, errors.New("bitcoin amount must be positive base-10 sats")
+	}
 	if len(request.UTXOs) == 0 {
 		return wallet.RawTransaction{}, errors.New("bitcoin proposal requires at least one utxo")
 	}
@@ -57,7 +62,7 @@ func (a *Adapter) BuildTransaction(ctx context.Context, source wallet.Wallet, re
 		"network":       a.network,
 		"from":          source.Address,
 		"to":            request.To,
-		"amount_sats":   request.Amount,
+		"amount_sats":   amountSats,
 		"fee_rate_sats": request.FeeRateSats,
 		"utxos":         request.UTXOs,
 		"change_policy": "send change back to wallet address",

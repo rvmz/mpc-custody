@@ -58,6 +58,33 @@ func (s *MemoryStore) CreateWallet(ctx context.Context, w wallet.Wallet) error {
 	return nil
 }
 
+// CreateWalletIdempotently stores a wallet and idempotency key atomically.
+func (s *MemoryStore) CreateWalletIdempotently(ctx context.Context, w wallet.Wallet, record wallet.IdempotencyRecord) (wallet.Wallet, bool, error) {
+	select {
+	case <-ctx.Done():
+		return wallet.Wallet{}, false, ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := idempotencyKey(record.Scope, record.Key)
+	if existing, ok := s.idempotency[key]; ok {
+		stored, ok := s.wallets[existing.ResourceID]
+		if !ok {
+			return wallet.Wallet{}, false, ErrWalletNotFound
+		}
+		return stored, false, nil
+	}
+	if _, ok := s.wallets[w.ID]; ok {
+		return wallet.Wallet{}, false, ErrDuplicateWallet
+	}
+	s.wallets[w.ID] = w
+	s.idempotency[key] = record
+	return w, true, nil
+}
+
 // GetWallet returns a wallet by ID.
 func (s *MemoryStore) GetWallet(ctx context.Context, id string) (wallet.Wallet, error) {
 	select {
@@ -94,6 +121,33 @@ func (s *MemoryStore) CreateTransaction(ctx context.Context, proposal wallet.Tra
 	return nil
 }
 
+// CreateTransactionIdempotently stores a transaction and idempotency key atomically.
+func (s *MemoryStore) CreateTransactionIdempotently(ctx context.Context, proposal wallet.TransactionProposal, record wallet.IdempotencyRecord) (wallet.TransactionProposal, bool, error) {
+	select {
+	case <-ctx.Done():
+		return wallet.TransactionProposal{}, false, ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := idempotencyKey(record.Scope, record.Key)
+	if existing, ok := s.idempotency[key]; ok {
+		stored, ok := s.transactions[existing.ResourceID]
+		if !ok {
+			return wallet.TransactionProposal{}, false, ErrTransactionNotFound
+		}
+		return cloneProposal(stored), false, nil
+	}
+	if _, ok := s.transactions[proposal.ID]; ok {
+		return wallet.TransactionProposal{}, false, ErrDuplicateTransaction
+	}
+	s.transactions[proposal.ID] = cloneProposal(proposal)
+	s.idempotency[key] = record
+	return cloneProposal(proposal), true, nil
+}
+
 // GetTransaction returns a transaction proposal by ID.
 func (s *MemoryStore) GetTransaction(ctx context.Context, id string) (wallet.TransactionProposal, error) {
 	select {
@@ -128,6 +182,65 @@ func (s *MemoryStore) UpdateTransaction(ctx context.Context, proposal wallet.Tra
 	}
 	s.transactions[proposal.ID] = cloneProposal(proposal)
 	return nil
+}
+
+// AddApproval atomically appends a signer approval to a proposal.
+func (s *MemoryStore) AddApproval(ctx context.Context, transactionID string, approval wallet.Approval) (wallet.TransactionProposal, error) {
+	select {
+	case <-ctx.Done():
+		return wallet.TransactionProposal{}, ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	proposal, ok := s.transactions[transactionID]
+	if !ok {
+		return wallet.TransactionProposal{}, ErrTransactionNotFound
+	}
+	if proposal.Status != wallet.TransactionStatusProposed {
+		return wallet.TransactionProposal{}, wallet.ErrTransactionNotProposed
+	}
+	if proposal.Approvals == nil {
+		proposal.Approvals = make(map[string]wallet.Approval)
+	}
+	if _, ok := proposal.Approvals[approval.SignerID]; ok {
+		return wallet.TransactionProposal{}, wallet.ErrDuplicateApproval
+	}
+	proposal.Approvals[approval.SignerID] = approval
+	proposal.UpdatedAt = approval.CreatedAt
+	s.transactions[transactionID] = cloneProposal(proposal)
+	return cloneProposal(proposal), nil
+}
+
+// MarkTransactionSigned marks a proposed transaction as signed once.
+func (s *MemoryStore) MarkTransactionSigned(ctx context.Context, transactionID string, signedTransaction string) (wallet.TransactionProposal, bool, error) {
+	select {
+	case <-ctx.Done():
+		return wallet.TransactionProposal{}, false, ctx.Err()
+	default:
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	proposal, ok := s.transactions[transactionID]
+	if !ok {
+		return wallet.TransactionProposal{}, false, ErrTransactionNotFound
+	}
+	if proposal.Status != wallet.TransactionStatusProposed {
+		return cloneProposal(proposal), false, nil
+	}
+	proposal.Status = wallet.TransactionStatusSigned
+	proposal.SignedTransaction = signedTransaction
+	for _, approval := range proposal.Approvals {
+		if approval.CreatedAt.After(proposal.UpdatedAt) {
+			proposal.UpdatedAt = approval.CreatedAt
+		}
+	}
+	s.transactions[transactionID] = cloneProposal(proposal)
+	return cloneProposal(proposal), true, nil
 }
 
 // AppendAuditEvent stores an immutable audit event.
