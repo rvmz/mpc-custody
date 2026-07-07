@@ -13,6 +13,7 @@ type Config struct {
 	ServiceName       string
 	Environment       string
 	BroadcastMode     string
+	DatabaseURL       string
 	ShutdownGraceTime time.Duration
 }
 
@@ -23,6 +24,7 @@ func Load() Config {
 		ServiceName:       env("SERVICE_NAME", "mpc-custody-api"),
 		Environment:       env("ENVIRONMENT", "local"),
 		BroadcastMode:     env("BROADCAST_MODE", "mock"),
+		DatabaseURL:       env("DATABASE_URL", ""),
 		ShutdownGraceTime: envDuration("SHUTDOWN_GRACE_SECONDS", 10*time.Second),
 	}
 }

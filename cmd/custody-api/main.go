@@ -24,13 +24,21 @@ func main() {
 	cfg := config.Load()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	metrics := observability.NewMetrics()
+	ctx := context.Background()
+
+	custodyStore, closeStore, err := openStore(ctx, cfg, logger)
+	if err != nil {
+		logger.Error("open store failed", "error", err)
+		os.Exit(1)
+	}
+	defer closeStore()
 
 	registry := wallet.NewChainRegistry(
 		bitcoin.NewAdapter("testnet"),
 		evm.NewAdapter(31337),
 	)
 	service := wallet.NewService(
-		store.NewMemoryStore(),
+		custodyStore,
 		registry,
 		signing.NewDemoQuorumBackend(),
 		metrics,
@@ -67,4 +75,18 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("custody api stopped")
+}
+
+func openStore(ctx context.Context, cfg config.Config, logger *slog.Logger) (wallet.Store, func(), error) {
+	if cfg.DatabaseURL == "" {
+		logger.Warn("using in-memory store; set DATABASE_URL for durable persistence")
+		return store.NewMemoryStore(), func() {}, nil
+	}
+
+	postgresStore, err := store.OpenPostgres(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	logger.Info("using postgres store")
+	return postgresStore, postgresStore.Close, nil
 }

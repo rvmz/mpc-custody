@@ -7,6 +7,7 @@ This service is a compact portfolio project for custody backend design. It focus
 - Multi-chain transaction orchestration.
 - Quorum-gated signing.
 - A signing interface that can be backed by real threshold ECDSA later.
+- Durable Postgres persistence for wallets and transaction proposals.
 - Operational visibility through metrics, trace IDs, health checks, and structured logs.
 - Container and Kubernetes deployment artifacts.
 
@@ -81,11 +82,17 @@ The service emits Prometheus-style metrics:
 
 Every request receives or propagates a W3C-style `traceparent` header. The trace and span IDs are included in structured request logs and stored on transaction proposals when available.
 
+## Persistence
+
+When `DATABASE_URL` is configured, the API opens a pgx connection pool and applies embedded SQL migrations before serving traffic. Wallets are stored in a normalized table, while transaction proposals are persisted as JSONB plus indexed lifecycle columns. That keeps the demo implementation small while preserving the full proposal state needed for audits, replay, and debugging.
+
+If `DATABASE_URL` is not configured, the service falls back to an in-memory store. This is useful for tests and quick local experiments, but Docker Compose uses Postgres by default.
+
 ## Production Extensions
 
 The next production-oriented steps are:
 
-- Add Postgres persistence for wallets, transaction proposals, signer approvals, and idempotency keys.
+- Add idempotency keys and a normalized signer approval audit table.
 - Replace mock broadcast with Bitcoin Core/regtest and EVM JSON-RPC clients.
 - Integrate a reviewed threshold ECDSA implementation or an external MPC signer.
 - Add authentication, signer authorization, policy limits, and audit log export.

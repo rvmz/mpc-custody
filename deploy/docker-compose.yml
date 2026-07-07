@@ -7,8 +7,28 @@ services:
       HTTP_ADDR: :8080
       ENVIRONMENT: compose
       BROADCAST_MODE: mock
+      DATABASE_URL: postgres://custody:custody@postgres:5432/custody?sslmode=disable
     ports:
       - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: custody
+      POSTGRES_USER: custody
+      POSTGRES_PASSWORD: custody
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U custody -d custody"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -19,3 +39,6 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
+
+volumes:
+  postgres-data:
