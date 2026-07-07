@@ -38,6 +38,14 @@ docker compose -f deploy/docker-compose.yml up --build
 
 The Compose stack starts the API, Postgres, Anvil, and Prometheus. The API runs migrations automatically when `DATABASE_URL` is set and uses Anvil for EVM nonce, gas, signing, and broadcast demos.
 
+Run the full demo flow:
+
+```sh
+./scripts/demo.sh
+```
+
+The script starts Docker Compose, creates EVM and Bitcoin wallets, proposes transactions, records two co-signatures, broadcasts both transactions, checks Postgres persistence, verifies metrics, and stops the stack.
+
 Create an EVM wallet:
 
 ```sh
